@@ -1,0 +1,1601 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FAB Team Tracker</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23031B4E'/%3E%3Cpath d='M42 8 56 6 47 48 39 36z' fill='%23F71925'/%3E%3Ctext x='9' y='40' font-family='Arial,sans-serif' font-size='24' font-weight='700' fill='white'%3EFAB%3C/text%3E%3C/svg%3E" />
+
+  <!-- CDN deps — requires internet on first load; Phase 4 will bundle inline for full offline use -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: { extend: { colors: { fab: { blue: '#031B4E', red: '#F71925' } } } }
+    };
+  </script>
+
+  <style>
+    @keyframes slideUp { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
+    .animate-up { animation: slideUp .18s ease-out; }
+    @keyframes fadeIn { from { opacity:0; } to { opacity:1; } }
+    .animate-in { animation: fadeIn .15s ease-out; }
+    ::-webkit-scrollbar { width:6px; height:6px; }
+    ::-webkit-scrollbar-track { background:transparent; }
+    ::-webkit-scrollbar-thumb { background:#cbd5e1; border-radius:99px; }
+    .dark ::-webkit-scrollbar-thumb { background:#475569; }
+    @media print {
+      aside, header, .no-print { display:none !important; }
+      .lg\:pl-60 { padding-left:0 !important; }
+      body { background:white !important; }
+      .bg-white { box-shadow:none !important; }
+      @page { margin:1.5cm; }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useReducer, useContext, useMemo, useCallback, useRef, createContext } = React;
+
+    // ─────────────────────────────────────────────────────────────
+    // CONSTANTS
+    // ─────────────────────────────────────────────────────────────
+    const STATUSES   = ['Not Started','In Progress','At Risk','Blocked','Completed'];
+    const PRIORITIES = ['Low','Medium','High','Critical'];
+
+    const STATUS_CFG = {
+      'Not Started': { pill:'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300',  dot:'bg-gray-400' },
+      'In Progress': { pill:'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300', dot:'bg-blue-500' },
+      'At Risk':     { pill:'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300', dot:'bg-amber-500' },
+      'Blocked':     { pill:'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300',    dot:'bg-red-500' },
+      'Completed':   { pill:'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300', dot:'bg-green-500' },
+    };
+    const PRI_CFG = {
+      'Low':      'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300',
+      'Medium':   'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300',
+      'High':     'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300',
+      'Critical': 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300',
+    };
+
+    const DEFAULT_DEPTS    = ['Information Security','Risk Management','Compliance','Audit','Technology','Operations','Legal','Finance'];
+    const DEFAULT_WTYPES   = ['BAU','Project','Ad Hoc','Regulatory','Audit','Review','Assessment'];
+    const DEFAULT_LOCS     = ['HQ - Abu Dhabi','Dubai','KSA','Egypt','Remote'];
+    const LS_KEY           = 'fab-tracker-v2';
+
+    // ─────────────────────────────────────────────────────────────
+    // INLINE SVG ICONS  (Lucide-compatible paths)
+    // ─────────────────────────────────────────────────────────────
+    const Ic = ({ d, size=18, className='' }) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+        strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={`shrink-0 ${className}`}>
+        {(Array.isArray(d)?d:[d]).map((p,i)=><path key={i} d={p}/>)}
+      </svg>
+    );
+    const I = {
+      Home:     ()=><Ic d={["M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z","M9 22V12h6v10"]}/>,
+      Folder:   ()=><Ic d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>,
+      FolderOk: ()=><Ic d={["M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z","M9 14l2 2 4-4"]}/>,
+      Users:    ()=><Ic d={["M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2","M9 7a4 4 0 1 0 0-8 4 4 0 0 0 0 8","M23 21v-2a4 4 0 0 0-3-3.87","M16 3.13a4 4 0 0 1 0 7.75"]}/>,
+      Settings: ()=><Ic d={["M12 20a8 8 0 1 0 0-16 8 8 0 0 0 0 16","M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4","M12 2v2","M12 20v2","M4.93 4.93l1.41 1.41","M17.66 17.66l1.41 1.41","M2 12h2","M20 12h2","M6.34 17.66l-1.41 1.41","M19.07 4.93l-1.41 1.41"]}/>,
+      Plus:     ()=><Ic d={["M12 5v14","M5 12h14"]}/>,
+      Edit:     ()=><Ic d={["M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7","M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"]}/>,
+      Trash:    ()=><Ic d={["M3 6h18","M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"]}/>,
+      Search:   ()=><Ic d="M21 21l-6-6m2-5a7 7 0 1 1-14 0 7 7 0 0 1 14 0"/>,
+      X:        ()=><Ic d={["M18 6L6 18","M6 6l12 12"]}/>,
+      Check:    ()=><Ic d="M20 6L9 17l-5-5"/>,
+      ChevDown: ()=><Ic d="M6 9l6 6 6-6"/>,
+      ChevUp:   ()=><Ic d="M18 15l-6-6-6 6"/>,
+      ChevR:    ()=><Ic d="M9 18l6-6-6-6"/>,
+      Moon:     ()=><Ic d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>,
+      Sun:      ()=><Ic d={["M12 1v2","M12 21v2","M4.22 4.22l1.42 1.42","M18.36 18.36l1.42 1.42","M1 12h2","M21 12h2","M4.22 19.78l1.42-1.42","M18.36 5.64l1.42-1.42","M12 5a7 7 0 1 0 0 14A7 7 0 0 0 12 5z"]}/>,
+      Download: ()=><Ic d={["M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4","M7 10l5 5 5-5","M12 15V3"]}/>,
+      Upload:   ()=><Ic d={["M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4","M17 8l-5-5-5 5","M12 3v12"]}/>,
+      Json:     ()=><Ic d={["M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z","M14 2v6h6","M10 13c-.5.6-1 1-1 2s.5 1.4 1 2","M14 13c.5.6 1 1 1 2s-.5 1.4-1 2"]}/>,
+      Alert:    ()=><Ic d={["M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z","M12 9v4","M12 17h.01"]}/>,
+      Calendar: ()=><Ic d={["M8 2v4","M16 2v4","M3 10h18","M21 8a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8z"]}/>,
+      Clock:    ()=><Ic d={["M12 2a10 10 0 1 0 0 20A10 10 0 0 0 12 2z","M12 6v6l4 2"]}/>,
+      Save:     ()=><Ic d={["M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z","M17 21v-8H7v8","M7 3v5h8"]}/>,
+      History:  ()=><Ic d={["M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8","M3 3v5h5","M12 7v5l4 2"]}/>,
+      Shield:   ()=><Ic d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>,
+      Layers:   ()=><Ic d={["M12 2l10 6.5-10 6.5L2 8.5z","M2 15.5l10 6.5 10-6.5","M2 11.5l10 6.5 10-6.5"]}/>,
+      Activity: ()=><Ic d="M22 12h-4l-3 9L9 3l-3 9H2"/>,
+      Menu:     ()=><Ic d={["M3 12h18","M3 6h18","M3 18h18"]}/>,
+      Copy:     ()=><Ic d={["M20 9H11a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2z","M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"]}/>,
+      Eye:      ()=><Ic d={["M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z","M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"]}/>,
+      Grid:     ()=><Ic d={["M3 3h7v7H3z","M14 3h7v7h-7z","M3 14h7v7H3z","M14 14h7v7h-7z"]}/>,
+      Keyboard: ()=><Ic d={["M20 5H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2z","M8 10h.01","M12 10h.01","M16 10h.01","M8 14h8"]}/>,
+      Print:    ()=><Ic d={["M6 9V2h12v7","M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2","M6 14h12v8H6z"]}/>,
+      Undo:     ()=><Ic d={["M3 7v6h6","M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"]}/>,
+      Warning:  ()=><Ic d={["M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z","M12 9v4","M12 17h.01"]}/>,
+      Target:   ()=><Ic d={["M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20","M12 18a6 6 0 1 0 0-12 6 6 0 0 0 0 12","M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4"]}/>,
+      Zap:      ()=><Ic d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>,
+    };
+
+    // ─────────────────────────────────────────────────────────────
+    // UTILITIES
+    // ─────────────────────────────────────────────────────────────
+    const uid  = () => crypto.randomUUID();
+    const now  = () => new Date().toISOString();
+
+    const fmtDate = (iso) => {
+      if (!iso) return '—';
+      const d = new Date(iso);
+      return isNaN(d) ? iso : d.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' });
+    };
+
+    const isOverdue = (dueDate, status) => {
+      if (!dueDate || status === 'Completed') return false;
+      return new Date(dueDate) < new Date(new Date().toDateString());
+    };
+
+    const isDueSoon = (dueDate, status) => {
+      if (!dueDate || status === 'Completed') return false;
+      const diff = (new Date(dueDate) - new Date(new Date().toDateString())) / 86400000;
+      return diff >= 0 && diff <= 7;
+    };
+
+    const nextId = (records) => {
+      const nums = records.map(r => parseInt((r.recordId||'').replace('TT-',''),10)).filter(n=>!isNaN(n));
+      return `TT-${String(nums.length ? Math.max(...nums)+1 : 1).padStart(4,'0')}`;
+    };
+
+    const dlFile = (name, content, mime='text/plain') => {
+      const a = Object.assign(document.createElement('a'), {
+        href: URL.createObjectURL(new Blob([content],{type:mime})), download: name
+      });
+      a.click(); URL.revokeObjectURL(a.href);
+    };
+
+    const toCSV = (records) => {
+      const cols = ['recordId','mainProjectName','subTaskDetails','owner','department','workType','location','progress','priority','projectStartDate','dueDate','currentStatusAndComments'];
+      return [cols.join(','), ...records.map(r => cols.map(k=>`"${(r[k]||'').replace(/"/g,'""')}"`).join(','))].join('\n');
+    };
+
+    const parseCSV = (text) => {
+      const lines = text.trim().split(/\r?\n/);
+      if (lines.length < 2) return [];
+      const headers = lines[0].split(',').map(h=>h.replace(/^"|"$/g,'').trim());
+      return lines.slice(1).map(line => {
+        const vals = [], re = /("(?:[^"]|"")*"|[^,]*)/g; let m;
+        while ((m = re.exec(line)) !== null) vals.push(m[1].replace(/^"|"$/g,'').replace(/""/g,'"'));
+        return Object.fromEntries(headers.map((h,i) => [h, vals[i]?.trim()||'']));
+      });
+    };
+
+    // ─────────────────────────────────────────────────────────────
+    // DATA LAYER — localStorage + File System Access API
+    // ─────────────────────────────────────────────────────────────
+    const EMPTY = {
+      records: [], owners: [], auditLog: [],
+      settings: { appTitle:'FAB Team Tracker', departments:[...DEFAULT_DEPTS], workTypes:[...DEFAULT_WTYPES], locations:[...DEFAULT_LOCS] }
+    };
+
+    const loadLS = () => {
+      try {
+        const raw = localStorage.getItem(LS_KEY);
+        return raw ? { ...EMPTY, ...JSON.parse(raw) } : EMPTY;
+      } catch { return EMPTY; }
+    };
+
+    const saveLS = (state) => {
+      try { localStorage.setItem(LS_KEY, JSON.stringify({ records:state.records, owners:state.owners, settings:state.settings, auditLog:state.auditLog })); }
+      catch { /* storage full */ }
+    };
+
+    let _dirHandle = null;
+    const connectFolder = async () => { try { _dirHandle = await window.showDirectoryPicker({mode:'readwrite'}); return _dirHandle.name; } catch { return null; } };
+    const saveToFolder = async (state) => {
+      if (!_dirHandle) return false;
+      try {
+        const fh = await _dirHandle.getFileHandle('tracker-data.json',{create:true});
+        const w  = await fh.createWritable();
+        await w.write(JSON.stringify({records:state.records,owners:state.owners,settings:state.settings},null,2));
+        await w.close(); return true;
+      } catch { return false; }
+    };
+    const loadFromFolder = async () => {
+      if (!_dirHandle) return null;
+      try { const fh=await _dirHandle.getFileHandle('tracker-data.json'); return JSON.parse(await (await fh.getFile()).text()); }
+      catch { return null; }
+    };
+
+    // ─────────────────────────────────────────────────────────────
+    // STATE — useReducer
+    // ─────────────────────────────────────────────────────────────
+    const addLog = (log, action, detail) => [{ id:uid(), ts:now(), action, detail }, ...log.slice(0,299)];
+
+    function reducer(state, act) {
+      let next;
+      switch (act.type) {
+        case 'LOAD': return { ...state, ...act.payload };
+        case 'ADD_RECORD': {
+          const rec = { ...act.payload, id:uid(), createdAt:now(), updatedAt:now() };
+          next = { ...state, records:[...state.records, rec] };
+          next.auditLog = addLog(next.auditLog, 'Added', `${rec.recordId}: ${rec.mainProjectName}`);
+          break;
+        }
+        case 'UPDATE_RECORD': {
+          next = { ...state, records: state.records.map(r => r.id===act.payload.id ? {...r,...act.payload,updatedAt:now()} : r) };
+          next.auditLog = addLog(next.auditLog, 'Updated', `${act.payload.recordId}: ${act.payload.mainProjectName}`);
+          break;
+        }
+        case 'DELETE_RECORD': {
+          const r = state.records.find(x=>x.id===act.payload);
+          next = { ...state, records: state.records.filter(x=>x.id!==act.payload) };
+          next.auditLog = addLog(next.auditLog, 'Deleted', r?.recordId||act.payload);
+          break;
+        }
+        case 'RESTORE_RECORD': {
+          const rec = { ...act.payload, updatedAt:now() };
+          next = { ...state, records:[...state.records, rec] };
+          next.auditLog = addLog(next.auditLog, 'Restored', `${rec.recordId}: ${rec.mainProjectName}`);
+          break;
+        }
+        case 'DELETE_RECORDS_BULK': {
+          const ids = new Set(act.payload);
+          next = { ...state, records: state.records.filter(x=>!ids.has(x.id)) };
+          next.auditLog = addLog(next.auditLog, 'Bulk Deleted', `${ids.size} records`);
+          break;
+        }
+        case 'UPDATE_RECORDS_BULK': {
+          const { ids, patch } = act.payload;
+          const idSet = new Set(ids);
+          next = { ...state, records: state.records.map(r => idSet.has(r.id) ? {...r,...patch,updatedAt:now()} : r) };
+          next.auditLog = addLog(next.auditLog, 'Bulk Updated', `${ids.length} records → ${JSON.stringify(patch)}`);
+          break;
+        }
+        case 'ADD_OWNER': {
+          const o = { ...act.payload, id:uid(), createdAt:now(), updatedAt:now() };
+          next = { ...state, owners:[...state.owners, o] };
+          next.auditLog = addLog(next.auditLog, 'Owner Added', o.name);
+          break;
+        }
+        case 'UPDATE_OWNER':
+          next = { ...state, owners: state.owners.map(o => o.id===act.payload.id ? {...o,...act.payload,updatedAt:now()} : o) };
+          next.auditLog = addLog(next.auditLog, 'Owner Updated', act.payload.name);
+          break;
+        case 'DELETE_OWNER': {
+          const o = state.owners.find(x=>x.id===act.payload);
+          next = { ...state, owners: state.owners.filter(x=>x.id!==act.payload) };
+          next.auditLog = addLog(next.auditLog, 'Owner Deleted', o?.name||act.payload);
+          break;
+        }
+        case 'IMPORT': {
+          const { records, owners, mode } = act.payload;
+          if (mode==='replace') {
+            next = { ...state, records: records||state.records, owners: owners||state.owners };
+          } else {
+            const map = new Map(state.records.map(r=>[r.recordId,r]));
+            (records||[]).forEach(r => map.set(r.recordId, { id: map.get(r.recordId)?.id||uid(), createdAt: map.get(r.recordId)?.createdAt||now(), ...r, updatedAt:now() }));
+            next = { ...state, records:[...map.values()], owners: owners ? [...state.owners,...owners.filter(o=>!state.owners.find(x=>x.name===o.name))] : state.owners };
+          }
+          next.auditLog = addLog(next.auditLog, 'Imported', `${(records||[]).length} records (${mode})`);
+          break;
+        }
+        case 'SET_SETTINGS':
+          next = { ...state, settings:{ ...state.settings, ...act.payload } };
+          break;
+        default: return state;
+      }
+      saveLS(next);
+      return next;
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // CONTEXT
+    // ─────────────────────────────────────────────────────────────
+    const Ctx = createContext(null);
+    const useApp = () => useContext(Ctx);
+
+    function AppProvider({ children }) {
+      const [state, dispatch] = useReducer(reducer, null, loadLS);
+      const [view, setView]   = useState('dashboard');
+      const [dark, _setDark]  = useState(() => localStorage.getItem('fab-dark')==='1');
+      const [toast, setToast] = useState(null);
+      const [folder, setFolder] = useState(null);
+      const [showShortcuts, setShowShortcuts] = useState(false);
+      const toastTimer = useRef(null);
+
+      useEffect(() => {
+        document.documentElement.classList.toggle('dark', dark);
+        localStorage.setItem('fab-dark', dark?'1':'0');
+      }, [dark]);
+
+      const toggleDark = useCallback(() => _setDark(d=>!d), []);
+
+      const showToast = useCallback((msg, type='success', action=null) => {
+        clearTimeout(toastTimer.current);
+        setToast({ msg, type, id:uid(), action });
+        toastTimer.current = setTimeout(() => setToast(null), action ? 7000 : 3500);
+      }, []);
+
+      const dismissToast = useCallback(() => { clearTimeout(toastTimer.current); setToast(null); }, []);
+
+      const connectFolderCb = useCallback(async () => {
+        const name = await connectFolder();
+        if (!name) return;
+        setFolder(name);
+        showToast(`Connected: ${name}`);
+        const data = await loadFromFolder();
+        if (data?.records) { dispatch({ type:'IMPORT', payload:{ records:data.records, owners:data.owners, mode:'merge' } }); showToast('Data loaded from folder'); }
+      }, [showToast]);
+
+      const saveFolderCb = useCallback(async () => {
+        if (await saveToFolder(state)) showToast('Saved to folder');
+        else showToast('No folder connected', 'error');
+      }, [state, showToast]);
+
+      const value = useMemo(() => ({
+        state, dispatch, view, setView, dark, toggleDark,
+        toast, showToast, dismissToast, folder,
+        connectFolder:connectFolderCb, saveFolder:saveFolderCb,
+        showShortcuts, setShowShortcuts
+      }), [state, dispatch, view, dark, toggleDark, toast, showToast, dismissToast, folder, connectFolderCb, saveFolderCb, showShortcuts]);
+
+      return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // SHARED UI
+    // ─────────────────────────────────────────────────────────────
+
+    /* Button */
+    const Btn = ({ onClick, variant='primary', size='md', children, disabled, className='', type='button' }) => {
+      const base = 'inline-flex items-center gap-2 font-medium rounded-xl transition-all focus:outline-none focus:ring-2 focus:ring-offset-1 disabled:opacity-50 disabled:cursor-not-allowed';
+      const sz = { sm:'px-3 py-1.5 text-xs', md:'px-4 py-2 text-sm', lg:'px-5 py-2.5 text-sm' };
+      const va = {
+        primary:'bg-[#031B4E] text-white hover:bg-[#0b2a6b] focus:ring-[#031B4E]',
+        danger:'bg-red-600 text-white hover:bg-red-700 focus:ring-red-500',
+        ghost:'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700 focus:ring-gray-400',
+        outline:'border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 focus:ring-gray-400',
+      };
+      return <button type={type} onClick={onClick} disabled={disabled} className={`${base} ${sz[size]} ${va[variant]} ${className}`}>{children}</button>;
+    };
+
+    /* Field wrappers */
+    const Field = ({ label, error, children }) => (
+      <div className="space-y-1">
+        {label && <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide">{label}</label>}
+        {children}
+        {error && <p className="text-xs text-red-500">{error}</p>}
+      </div>
+    );
+
+    const inputCls = (err) => `w-full px-3 py-2 rounded-xl border text-sm bg-white dark:bg-gray-800 dark:text-white transition focus:outline-none focus:ring-2 focus:border-transparent ${err ? 'border-red-400 focus:ring-red-400' : 'border-gray-300 dark:border-gray-600 focus:ring-[#031B4E]'}`;
+
+    const Input = ({ label, error, ...p }) => <Field label={label} error={error}><input {...p} className={inputCls(error)} /></Field>;
+
+    const Textarea = ({ label, ...p }) => (
+      <Field label={label}><textarea {...p} rows={3} className={`${inputCls()} resize-none`} /></Field>
+    );
+
+    const Select = ({ label, options, value, onChange, placeholder='Select…', error }) => (
+      <Field label={label} error={error}>
+        <div className="relative">
+          <select value={value} onChange={e=>onChange(e.target.value)} className={`${inputCls(error)} appearance-none pr-8`}>
+            <option value="">{placeholder}</option>
+            {options.map(o=><option key={o} value={o}>{o}</option>)}
+          </select>
+          <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400"><I.ChevDown /></span>
+        </div>
+      </Field>
+    );
+
+    /* Modal */
+    const Modal = ({ open, onClose, title, children, width='max-w-2xl' }) => {
+      useEffect(() => {
+        const h = e => { if(e.key==='Escape') onClose(); };
+        if (open) document.addEventListener('keydown', h);
+        return () => document.removeEventListener('keydown', h);
+      }, [open, onClose]);
+      if (!open) return null;
+      return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-in">
+          <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+          <div className={`relative bg-white dark:bg-gray-900 rounded-2xl shadow-2xl w-full ${width} max-h-[92vh] flex flex-col animate-up`}>
+            <div className="flex items-center justify-between px-6 py-4 border-b dark:border-gray-700">
+              <h2 className="text-base font-bold text-gray-900 dark:text-white">{title}</h2>
+              <button onClick={onClose} className="p-1.5 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400"><I.X /></button>
+            </div>
+            <div className="overflow-y-auto p-6 flex-1">{children}</div>
+          </div>
+        </div>
+      );
+    };
+
+    /* Confirm dialog */
+    const Confirm = ({ open, onClose, onConfirm, title, message, danger }) => (
+      <Modal open={open} onClose={onClose} title={title} width="max-w-sm">
+        <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">{message}</p>
+        <div className="flex justify-end gap-3">
+          <Btn variant="outline" onClick={onClose}>Cancel</Btn>
+          <Btn variant={danger?'danger':'primary'} onClick={()=>{ onConfirm(); onClose(); }}>Confirm</Btn>
+        </div>
+      </Modal>
+    );
+
+    /* Toast — supports optional undo/action button */
+    const Toast = () => {
+      const { toast, dismissToast } = useApp();
+      if (!toast) return null;
+      const s = { success:'bg-emerald-600', error:'bg-red-600', info:'bg-[#031B4E]', warning:'bg-amber-500' };
+      return (
+        <div className={`fixed bottom-6 right-6 z-[100] flex items-center gap-3 px-4 py-3 rounded-2xl text-white text-sm font-medium shadow-xl animate-up ${s[toast.type]||s.success}`}>
+          <I.Check className="shrink-0"/><span>{toast.msg}</span>
+          {toast.action && (
+            <button onClick={()=>{ toast.action.fn(); dismissToast(); }}
+              className="ml-1 underline underline-offset-2 font-bold hover:opacity-80 transition-opacity whitespace-nowrap">
+              {toast.action.label}
+            </button>
+          )}
+          <button onClick={dismissToast} className="ml-1 opacity-60 hover:opacity-100 transition-opacity"><I.X/></button>
+        </div>
+      );
+    };
+
+    /* Badges */
+    const StatusBadge = ({ status }) => {
+      const c = STATUS_CFG[status] || STATUS_CFG['Not Started'];
+      return <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold ${c.pill}`}><span className={`w-1.5 h-1.5 rounded-full ${c.dot}`}/>{status}</span>;
+    };
+    const PriBadge = ({ priority }) => priority
+      ? <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold ${PRI_CFG[priority]||PRI_CFG.Medium}`}>{priority}</span>
+      : null;
+
+    /* Empty state */
+    const EmptyState = ({ Icon:Ico, title, desc, action }) => (
+      <div className="flex flex-col items-center justify-center py-20 text-center">
+        <div className="w-16 h-16 rounded-2xl bg-gray-100 dark:bg-gray-800 flex items-center justify-center mb-4 text-gray-300 dark:text-gray-600">{Ico&&<Ico/>}</div>
+        <h3 className="font-semibold text-gray-800 dark:text-gray-200 mb-1">{title}</h3>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mb-6 max-w-xs">{desc}</p>
+        {action}
+      </div>
+    );
+
+    /* Stat card */
+    const StatCard = ({ label, value, sub, gradient, Icon:Ico, onClick }) => (
+      <div onClick={onClick} className={`${gradient} rounded-2xl p-5 text-white shadow-lg ${onClick?'cursor-pointer hover:scale-[1.02] transition-transform':''}`}>
+        <div className="flex items-start justify-between mb-2">
+          <span className="text-xs font-semibold opacity-75 uppercase tracking-wide">{label}</span>
+          {Ico && <span className="opacity-50"><Ico/></span>}
+        </div>
+        <div className="text-3xl font-black">{value}</div>
+        {sub && <div className="text-xs opacity-60 mt-1">{sub}</div>}
+      </div>
+    );
+
+    /* Mini bar chart row */
+    const BarRow = ({ label, count, max, color='#031B4E' }) => (
+      <div className="flex items-center gap-3 py-1">
+        <div className="w-32 text-xs text-gray-500 dark:text-gray-400 truncate text-right shrink-0">{label}</div>
+        <div className="flex-1 bg-gray-100 dark:bg-gray-700 rounded-full h-2">
+          <div className="h-2 rounded-full transition-all duration-500" style={{width:`${max?(count/max)*100:0}%`,background:color}}/>
+        </div>
+        <div className="w-7 text-xs font-bold text-gray-700 dark:text-gray-300 text-right">{count}</div>
+      </div>
+    );
+
+    /* SVG donut */
+    const Donut = ({ data, size=148 }) => {
+      const total = data.reduce((s,d)=>s+d.v,0);
+      if (!total) return <div className="h-36 flex items-center justify-center text-xs text-gray-400">No data</div>;
+      const cx=size/2, cy=size/2, r=size*.38, ri=size*.25;
+      let angle=-90;
+      const arcs = data.map(d => {
+        const sweep=(d.v/total)*360, start=angle; angle+=sweep;
+        const rad = a => ({ x:cx+r*Math.cos(a*Math.PI/180), y:cy+r*Math.sin(a*Math.PI/180) });
+        const rin = a => ({ x:cx+ri*Math.cos(a*Math.PI/180), y:cy+ri*Math.sin(a*Math.PI/180) });
+        const o=rad(start), e=rad(start+sweep), io=rin(start), ie=rin(start+sweep);
+        const lg=sweep>180?1:0;
+        return { ...d, path:`M${o.x} ${o.y}A${r} ${r} 0 ${lg} 1 ${e.x} ${e.y}L${ie.x} ${ie.y}A${ri} ${ri} 0 ${lg} 0 ${io.x} ${io.y}Z` };
+      });
+      return (
+        <svg width={size} height={size}>
+          {arcs.map((a,i)=><path key={i} d={a.path} fill={a.c} className="hover:opacity-80 transition-opacity"/>)}
+          <text x={cx} y={cy-5} textAnchor="middle" style={{fill:'#374151',fontSize:22,fontWeight:800}}>{total}</text>
+          <text x={cx} y={cy+12} textAnchor="middle" style={{fill:'#9ca3af',fontSize:10}}>total</text>
+        </svg>
+      );
+    };
+
+    // ─────────────────────────────────────────────────────────────
+    // RECORD FORM
+    // ─────────────────────────────────────────────────────────────
+    const BLANK_REC = { recordId:'', mainProjectName:'', subTaskDetails:'', owner:'', department:'', workType:'', location:'', progress:'Not Started', priority:'Medium', projectStartDate:'', dueDate:'', currentStatusAndComments:'' };
+
+    const RecordForm = ({ initial, onSave, onClose }) => {
+      const { state } = useApp();
+      const [f, setF] = useState(initial || BLANK_REC);
+      const [err, setErr] = useState({});
+      const set = (k,v) => setF(p=>({...p,[k]:v}));
+
+      const validate = () => {
+        const e={};
+        if (!f.mainProjectName?.trim()) e.mainProjectName='Required';
+        if (!f.owner?.trim()) e.owner='Required';
+        if (f.dueDate && f.projectStartDate && f.dueDate < f.projectStartDate) e.dueDate='Must be after start date';
+        setErr(e); return !Object.keys(e).length;
+      };
+
+      const submit = e => { e.preventDefault(); if(validate()) onSave(f); };
+      const ownerOpts = state.owners.map(o=>o.name);
+
+      return (
+        <form onSubmit={submit} className="space-y-5">
+          <div className="grid grid-cols-2 gap-4">
+            <Input label="Record ID" value={f.recordId} onChange={e=>set('recordId',e.target.value)} placeholder="Auto if blank" />
+            <Select label="Status" options={STATUSES} value={f.progress} onChange={v=>set('progress',v)} />
+          </div>
+          <Input label="Main Item Name *" value={f.mainProjectName} onChange={e=>set('mainProjectName',e.target.value)} placeholder="e.g. FAB Governance – Project AI" error={err.mainProjectName} />
+          <Textarea label="Activity / Description" value={f.subTaskDetails} onChange={e=>set('subTaskDetails',e.target.value)} placeholder="Describe the activity or sub-task…" />
+          <div className="grid grid-cols-2 gap-4">
+            <Select label="Owner *" options={ownerOpts.length?ownerOpts:[]} value={f.owner} onChange={v=>set('owner',v)} placeholder="Select owner…" error={err.owner} />
+            <Select label="Priority" options={PRIORITIES} value={f.priority} onChange={v=>set('priority',v)} />
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <Select label="Department" options={state.settings.departments} value={f.department} onChange={v=>set('department',v)} />
+            <Select label="Work Type" options={state.settings.workTypes} value={f.workType} onChange={v=>set('workType',v)} />
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <Select label="Location" options={state.settings.locations} value={f.location} onChange={v=>set('location',v)} />
+            <div />
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <Input label="Start Date" type="date" value={f.projectStartDate} onChange={e=>set('projectStartDate',e.target.value)} />
+            <Input label="Due Date" type="date" value={f.dueDate} onChange={e=>set('dueDate',e.target.value)} error={err.dueDate} />
+          </div>
+          <Textarea label="Comments" value={f.currentStatusAndComments} onChange={e=>set('currentStatusAndComments',e.target.value)} placeholder="Status notes, blockers, updates…" />
+          <div className="flex justify-end gap-3 pt-3 border-t dark:border-gray-700">
+            <Btn variant="outline" onClick={onClose} type="button">Cancel</Btn>
+            <Btn type="submit"><I.Save/>Save Record</Btn>
+          </div>
+        </form>
+      );
+    };
+
+    // ─────────────────────────────────────────────────────────────
+    // OWNER FORM
+    // ─────────────────────────────────────────────────────────────
+    const BLANK_OWN = { name:'', email:'', department:'', role:'', location:'', status:'Active' };
+
+    const OwnerForm = ({ initial, onSave, onClose }) => {
+      const { state } = useApp();
+      const [f, setF] = useState(initial||BLANK_OWN);
+      const [err, setErr] = useState({});
+      const set = (k,v) => setF(p=>({...p,[k]:v}));
+      const submit = e => { e.preventDefault(); if(!f.name?.trim()){setErr({name:'Required'});return;} onSave(f); };
+      return (
+        <form onSubmit={submit} className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <Input label="Full Name *" value={f.name} onChange={e=>set('name',e.target.value)} placeholder="e.g. Ashwin George" error={err.name} />
+            <Input label="Email" type="email" value={f.email} onChange={e=>set('email',e.target.value)} placeholder="name@fab.ae" />
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <Select label="Department" options={state.settings.departments} value={f.department} onChange={v=>set('department',v)} />
+            <Input label="Role / Title" value={f.role} onChange={e=>set('role',e.target.value)} placeholder="e.g. Head of ISRG" />
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <Select label="Location" options={state.settings.locations} value={f.location} onChange={v=>set('location',v)} />
+            <Select label="Status" options={['Active','Inactive']} value={f.status} onChange={v=>set('status',v)} />
+          </div>
+          <div className="flex justify-end gap-3 pt-3 border-t dark:border-gray-700">
+            <Btn variant="outline" onClick={onClose} type="button">Cancel</Btn>
+            <Btn type="submit"><I.Save/>Save Owner</Btn>
+          </div>
+        </form>
+      );
+    };
+
+    // ─────────────────────────────────────────────────────────────
+    // DASHBOARD
+    // ─────────────────────────────────────────────────────────────
+    const Dashboard = () => {
+      const { state, setView } = useApp();
+      const r = state.records;
+
+      const stats = useMemo(() => {
+        const bySt = Object.fromEntries(STATUSES.map(s=>[s,r.filter(x=>x.progress===s).length]));
+        const overdue  = r.filter(x=>isOverdue(x.dueDate,x.progress)).length;
+        const dueSoon  = r.filter(x=>isDueSoon(x.dueDate,x.progress)).length;
+        const atRisk   = bySt['At Risk']+bySt['Blocked'];
+        const pct      = r.length ? Math.round((bySt['Completed']/r.length)*100) : 0;
+        const byDept   = r.reduce((a,x)=>{ if(x.department) a[x.department]=(a[x.department]||0)+1; return a; },{});
+        const byOwner  = r.reduce((a,x)=>{ if(x.owner) a[x.owner]=(a[x.owner]||0)+1; return a; },{});
+        const byProj   = r.reduce((a,x)=>{ if(x.mainProjectName) a[x.mainProjectName]=(a[x.mainProjectName]||0)+1; return a; },{});
+        const risk     = r.filter(x=>x.progress==='At Risk'||x.progress==='Blocked'||isOverdue(x.dueDate,x.progress));
+        return { bySt, overdue, dueSoon, atRisk, pct, byDept, byOwner, byProj, risk, total:r.length, completed:bySt['Completed'] };
+      }, [r]);
+
+      const donut = [
+        {label:'Not Started',v:stats.bySt['Not Started'],c:'#94a3b8'},
+        {label:'In Progress', v:stats.bySt['In Progress'],c:'#3b82f6'},
+        {label:'At Risk',     v:stats.bySt['At Risk'],    c:'#f59e0b'},
+        {label:'Blocked',     v:stats.bySt['Blocked'],    c:'#ef4444'},
+        {label:'Completed',   v:stats.bySt['Completed'],  c:'#22c55e'},
+      ].filter(d=>d.v>0);
+
+      const maxD = Math.max(...Object.values(stats.byDept),1);
+      const maxO = Math.max(...Object.values(stats.byOwner),1);
+      const maxP = Math.max(...Object.values(stats.byProj),1);
+
+      if (!r.length) return (
+        <div className="space-y-6">
+          {/* First-run onboarding (Phase 4) */}
+          <div className="bg-gradient-to-br from-[#031B4E] to-[#0d3080] rounded-2xl p-8 text-white">
+            <div className="flex items-center gap-3 mb-4">
+              <svg viewBox="0 0 64 64" width="40" height="40"><rect width="64" height="64" rx="12" fill="rgba(255,255,255,0.1)"/><path d="M42 8 56 6 47 48 39 36z" fill="#F71925"/><text x="8" y="42" fontFamily="Arial,sans-serif" fontSize="24" fontWeight="800" fill="white">FAB</text></svg>
+              <div><h2 className="text-xl font-black">Welcome to FAB Team Tracker</h2><p className="text-white/60 text-sm">Your offline-first team work tracker</p></div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+              {[
+                { step:'1', title:'Add Owners', desc:'Go to Owners and add your team members first.', view:'owners', icon:I.Users },
+                { step:'2', title:'Add Records', desc:'Then add work items and assign them to owners.', view:'records', icon:I.Layers },
+                { step:'3', title:'Track Progress', desc:'Update statuses and monitor the dashboard.', view:'records', icon:I.Activity },
+              ].map(s=>(
+                <div key={s.step} className="bg-white/10 rounded-xl p-4 cursor-pointer hover:bg-white/15 transition-colors" onClick={()=>setView(s.view)}>
+                  <div className="flex items-center gap-3 mb-2">
+                    <span className="w-7 h-7 rounded-full bg-[#F71925] flex items-center justify-center text-xs font-black">{s.step}</span>
+                    <s.icon/>
+                    <span className="font-bold text-sm">{s.title}</span>
+                  </div>
+                  <p className="text-white/60 text-xs">{s.desc}</p>
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-3">
+              <Btn variant="ghost" className="bg-white text-[#031B4E] hover:bg-white/90" onClick={()=>setView('owners')}><I.Users/>Add First Owner</Btn>
+              <Btn variant="ghost" className="text-white border border-white/30 hover:bg-white/10" onClick={()=>setView('records')}><I.Plus/>Add First Record</Btn>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {[['Press ?','to see all keyboard shortcuts'],['Press N','to quickly add a new record'],['Press /','to focus the search box']].map(([k,d])=>(
+              <div key={k} className="bg-white dark:bg-gray-800 rounded-2xl p-5 border border-gray-100 dark:border-gray-700 flex items-center gap-4">
+                <kbd className="px-3 py-1.5 rounded-lg bg-gray-100 dark:bg-gray-700 text-sm font-mono font-bold text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 shrink-0">{k}</kbd>
+                <span className="text-sm text-gray-600 dark:text-gray-400">{d}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+
+      return (
+        <div className="space-y-6">
+          {/* KPI cards */}
+          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
+            <StatCard label="Total Records"      value={stats.total}     gradient="bg-gradient-to-br from-[#031B4E] to-[#0d3080]" Icon={I.Layers} />
+            <StatCard label="Completed"          value={stats.completed} sub={`${stats.pct}% of total`} gradient="bg-gradient-to-br from-emerald-500 to-emerald-700" Icon={I.Check} />
+            <StatCard label="In Progress"        value={stats.bySt['In Progress']} gradient="bg-gradient-to-br from-blue-500 to-blue-700" Icon={I.Activity} />
+            <StatCard label="At Risk / Blocked"  value={stats.atRisk}    gradient="bg-gradient-to-br from-amber-500 to-amber-700" Icon={I.Alert} onClick={()=>setView('records')} />
+            <StatCard label="Overdue"            value={stats.overdue}   gradient="bg-gradient-to-br from-rose-500 to-rose-700"   Icon={I.Clock}    onClick={()=>setView('records')} />
+            <StatCard label="Due This Week"      value={stats.dueSoon}   gradient="bg-gradient-to-br from-violet-500 to-violet-700" Icon={I.Calendar} />
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* Donut */}
+            <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
+              <h3 className="font-bold text-gray-900 dark:text-white mb-4">Progress Distribution</h3>
+              <div className="flex flex-col items-center gap-4">
+                <Donut data={donut} />
+                <div className="w-full space-y-1.5">
+                  {donut.map(d=>(
+                    <div key={d.label} className="flex items-center justify-between text-sm">
+                      <div className="flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-full" style={{background:d.c}}/><span className="text-gray-600 dark:text-gray-400">{d.label}</span></div>
+                      <span className="font-bold text-gray-800 dark:text-gray-200">{d.v}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Dept workload */}
+            <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
+              <h3 className="font-bold text-gray-900 dark:text-white mb-4">Department Workload</h3>
+              {Object.keys(stats.byDept).length
+                ? Object.entries(stats.byDept).sort((a,b)=>b[1]-a[1]).slice(0,8).map(([d,c])=><BarRow key={d} label={d} count={c} max={maxD} color="#031B4E"/>)
+                : <p className="text-sm text-gray-400">No department data</p>}
+            </div>
+
+            {/* Owner workload */}
+            <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
+              <h3 className="font-bold text-gray-900 dark:text-white mb-4">Owner Workload</h3>
+              {Object.keys(stats.byOwner).length
+                ? Object.entries(stats.byOwner).sort((a,b)=>b[1]-a[1]).slice(0,8).map(([o,c])=><BarRow key={o} label={o} count={c} max={maxO} color="#F71925"/>)
+                : <p className="text-sm text-gray-400">No owner data</p>}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Risk & Attention */}
+            <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-bold text-gray-900 dark:text-white">Risk &amp; Attention</h3>
+                <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${stats.risk.length?'bg-red-100 text-red-700':'bg-green-100 text-green-700'}`}>{stats.risk.length} items</span>
+              </div>
+              {stats.risk.length ? (
+                <div className="space-y-2 max-h-72 overflow-y-auto">
+                  {stats.risk.slice(0,12).map(item=>(
+                    <div key={item.id} className="flex items-start gap-3 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-xl">
+                      <StatusBadge status={item.progress}/>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-semibold text-gray-800 dark:text-gray-200 truncate">{item.subTaskDetails||item.mainProjectName}</p>
+                        <p className="text-xs text-gray-500">{item.owner} · {item.dueDate?`Due ${fmtDate(item.dueDate)}`:'No due date'}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="flex items-center gap-3 text-emerald-600 py-4">
+                  <I.Shield/><span className="text-sm font-semibold">All items on track</span>
+                </div>
+              )}
+            </div>
+
+            {/* Key projects */}
+            <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
+              <h3 className="font-bold text-gray-900 dark:text-white mb-4">Key Projects</h3>
+              {Object.keys(stats.byProj).length
+                ? Object.entries(stats.byProj).sort((a,b)=>b[1]-a[1]).slice(0,8).map(([p,c])=><BarRow key={p} label={p} count={c} max={maxP} color="#6366f1"/>)
+                : <p className="text-sm text-gray-400">No project data</p>}
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    // ─────────────────────────────────────────────────────────────
+    // RECORDS VIEW
+    // ─────────────────────────────────────────────────────────────
+    const RecordsView = ({ searchRef }) => {
+      const { state, dispatch, showToast } = useApp();
+      const [q, setQ]               = useState('');
+      const [flt, setFlt]           = useState({ status:'', owner:'', dept:'', wtype:'', pri:'' });
+      const [sort, setSort]         = useState({ k:'dueDate', d:'asc' });
+      const [addOpen, setAdd]       = useState(false);
+      const [editRec, setEdit]      = useState(null);
+      const [delRec,  setDel]       = useState(null);
+      const [detail,  setDet]       = useState(null);
+      const [selected, setSelected] = useState(new Set());
+      const [activePreset, setActivePreset] = useState(null);
+      const [bulkDelConfirm, setBulkDel]    = useState(false);
+      const fileRef = useRef();
+      const localSearchRef = useRef();
+      const sRef = searchRef || localSearchRef;
+
+      // Preset filter override (test fn for custom row-level predicates like Overdue/DueThisWeek)
+      const [presetTest, setPresetTest] = useState(null);
+
+      const owners = state.owners.map(o=>o.name);
+
+      const rows = useMemo(() => {
+        let list = state.records;
+        if (q) {
+          const lq = q.toLowerCase();
+          list = list.filter(r => [r.mainProjectName,r.subTaskDetails,r.owner,r.recordId].some(v=>(v||'').toLowerCase().includes(lq)));
+        }
+        if (flt.status) list = list.filter(r=>r.progress===flt.status);
+        if (flt.owner)  list = list.filter(r=>r.owner===flt.owner);
+        if (flt.dept)   list = list.filter(r=>r.department===flt.dept);
+        if (flt.wtype)  list = list.filter(r=>r.workType===flt.wtype);
+        if (flt.pri)    list = list.filter(r=>r.priority===flt.pri);
+        if (presetTest) list = list.filter(presetTest);
+        return [...list].sort((a,b) => {
+          const av=a[sort.k]||'', bv=b[sort.k]||'';
+          return sort.d==='asc' ? av.localeCompare(bv) : bv.localeCompare(av);
+        });
+      }, [state.records, q, flt, sort, presetTest]);
+
+      const sf = (k,v) => setFlt(p=>({...p,[k]:v}));
+      const toggleSort = k => setSort(s=>({ k, d:s.k===k&&s.d==='asc'?'desc':'asc' }));
+      const clearFlt = () => { setFlt({ status:'', owner:'', dept:'', wtype:'', pri:'' }); setActivePreset(null); setPresetTest(null); };
+      const hasFilter = Object.values(flt).some(Boolean)||q||activePreset;
+
+      const applyPreset = p => {
+        setFlt(p.flt);
+        setActivePreset(p.label);
+        setPresetTest(p.test ? ()=>p.test : null);
+        setSelected(new Set());
+      };
+
+      // Keyboard shortcut N = new record
+      useEffect(() => {
+        const h = e => { if(e.key==='n'&&document.activeElement?.tagName!=='INPUT'&&document.activeElement?.tagName!=='TEXTAREA') setAdd(true); };
+        document.addEventListener('keydown', h);
+        return () => document.removeEventListener('keydown', h);
+      }, []);
+
+      const saveRec = (form) => {
+        const data = { ...form, recordId: form.recordId || nextId(state.records) };
+        if (editRec) { dispatch({ type:'UPDATE_RECORD', payload:{ ...editRec, ...data } }); showToast('Record updated'); setEdit(null); }
+        else         { dispatch({ type:'ADD_RECORD', payload:data }); showToast('Record added'); setAdd(false); }
+      };
+
+      const deleteOne = rec => {
+        dispatch({ type:'DELETE_RECORD', payload:rec.id });
+        showToast('Record deleted', 'info', {
+          label:'Undo',
+          fn: () => dispatch({ type:'RESTORE_RECORD', payload:rec })
+        });
+      };
+
+      const exportCSV = () => { try { dlFile(`fab-tracker-${new Date().toISOString().slice(0,10)}.csv`, toCSV(rows), 'text/csv'); showToast('CSV exported'); } catch { showToast('Export failed','error'); } };
+      const exportJSON = () => { try { dlFile(`fab-backup-${new Date().toISOString().slice(0,10)}.json`, JSON.stringify({records:state.records,owners:state.owners,settings:state.settings},null,2),'application/json'); showToast('Backup downloaded'); } catch { showToast('Export failed','error'); } };
+
+      const importFile = e => {
+        const file = e.target.files?.[0]; if(!file) return;
+        const reader = new FileReader();
+        reader.onload = ev => {
+          try {
+            if (file.name.endsWith('.json')) {
+              const d = JSON.parse(ev.target.result);
+              if (!d.records) { showToast('Invalid backup file','error'); return; }
+              dispatch({ type:'IMPORT', payload:{ records:d.records, owners:d.owners, mode:'merge' } });
+              showToast(`Imported ${d.records.length} records`);
+            } else {
+              const recs = parseCSV(ev.target.result);
+              dispatch({ type:'IMPORT', payload:{ records:recs.map(r=>({id:uid(),createdAt:now(),updatedAt:now(),...r})), mode:'merge' } });
+              showToast(`Imported ${recs.length} CSV rows`);
+            }
+          } catch { showToast('Failed to parse file','error'); }
+        };
+        reader.readAsText(file);
+        e.target.value='';
+      };
+
+      const SortIco = ({ col }) => <button onClick={()=>toggleSort(col)} className="ml-1 opacity-40 hover:opacity-100">{sort.k===col?(sort.d==='asc'?'↑':'↓'):'↕'}</button>;
+
+      const selCls = 'px-3 py-2 rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 dark:text-white text-xs focus:outline-none focus:ring-2 focus:ring-[#031B4E] transition';
+
+      const allChecked = rows.length>0 && rows.every(r=>selected.has(r.id));
+      const toggleAll = () => setSelected(allChecked ? new Set() : new Set(rows.map(r=>r.id)));
+      const toggleOne = id => setSelected(prev => { const n=new Set(prev); n.has(id)?n.delete(id):n.add(id); return n; });
+
+      return (
+        <div className="space-y-4">
+          {/* Filter presets (Phase 2) */}
+          <FilterPresets onSelect={applyPreset} activePreset={activePreset}/>
+
+          {/* Toolbar */}
+          <div className="flex flex-wrap gap-2 items-center">
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"><I.Search/></span>
+              <input ref={sRef} value={q} onChange={e=>setQ(e.target.value)} placeholder="Search… (press /)"
+                className="pl-9 pr-3 py-2 rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 dark:text-white text-sm w-52 focus:outline-none focus:ring-2 focus:ring-[#031B4E] transition" />
+            </div>
+            <select value={flt.status} onChange={e=>sf('status',e.target.value)} className={selCls}>
+              <option value="">All Statuses</option>{STATUSES.map(s=><option key={s}>{s}</option>)}
+            </select>
+            <select value={flt.owner} onChange={e=>sf('owner',e.target.value)} className={selCls}>
+              <option value="">All Owners</option>{owners.map(n=><option key={n}>{n}</option>)}
+            </select>
+            <select value={flt.pri} onChange={e=>sf('pri',e.target.value)} className={selCls}>
+              <option value="">All Priorities</option>{PRIORITIES.map(p=><option key={p}>{p}</option>)}
+            </select>
+            <select value={flt.dept} onChange={e=>sf('dept',e.target.value)} className={selCls}>
+              <option value="">All Depts</option>{state.settings.departments.map(d=><option key={d}>{d}</option>)}
+            </select>
+            {hasFilter && <Btn variant="ghost" size="sm" onClick={clearFlt}><I.X/>Clear</Btn>}
+            <div className="ml-auto flex gap-2 flex-wrap no-print">
+              <Btn variant="outline" size="sm" onClick={exportCSV}><I.Download/>CSV</Btn>
+              <Btn variant="outline" size="sm" onClick={exportJSON}><I.Json/>Backup</Btn>
+              <Btn variant="outline" size="sm" onClick={()=>fileRef.current?.click()}><I.Upload/>Restore</Btn>
+              <input ref={fileRef} type="file" accept=".json,.csv" className="hidden" onChange={importFile}/>
+              <Btn size="sm" onClick={()=>setAdd(true)}><I.Plus/>Add Record</Btn>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+            <span>{rows.length} of {state.records.length} records</span>
+            {selected.size>0 && <span className="font-semibold text-[#031B4E] dark:text-blue-400">· {selected.size} selected</span>}
+            {hasFilter && <span className="font-semibold text-[#031B4E] dark:text-blue-400">· filters active</span>}
+          </div>
+
+          {rows.length === 0 ? (
+            <EmptyState Icon={I.Layers}
+              title={hasFilter?'No matching records':'No records yet'}
+              desc={hasFilter?'Adjust your filters or search terms.':'Add your first work record to start tracking.'}
+              action={!hasFilter&&<Btn onClick={()=>setAdd(true)}><I.Plus/>Add Record</Btn>}
+            />
+          ) : (
+            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 dark:bg-gray-700/60 text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    <tr>
+                      <th className="px-3 py-3 no-print">
+                        <input type="checkbox" checked={allChecked} onChange={toggleAll}
+                          className="w-4 h-4 rounded accent-[#031B4E] cursor-pointer"/>
+                      </th>
+                      <th className="px-4 py-3 text-left">ID</th>
+                      <th className="px-4 py-3 text-left">Main Item <SortIco col="mainProjectName"/></th>
+                      <th className="px-4 py-3 text-left">Activity</th>
+                      <th className="px-4 py-3 text-left">Owner <SortIco col="owner"/></th>
+                      <th className="px-4 py-3 text-left">Status <SortIco col="progress"/></th>
+                      <th className="px-4 py-3 text-left">Priority</th>
+                      <th className="px-4 py-3 text-left">Due Date <SortIco col="dueDate"/></th>
+                      <th className="px-4 py-3 text-left">Dept</th>
+                      <th className="px-4 py-3 w-20 no-print"></th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+                    {rows.map(rec => {
+                      const ov   = isOverdue(rec.dueDate, rec.progress);
+                      const ds   = isDueSoon(rec.dueDate, rec.progress);
+                      const chkd = selected.has(rec.id);
+                      return (
+                        <tr key={rec.id} onClick={()=>setDet(rec)}
+                          className={`cursor-pointer transition-colors hover:bg-blue-50/40 dark:hover:bg-gray-700/40 ${chkd?'bg-blue-50 dark:bg-blue-900/20':ov?'bg-red-50/40 dark:bg-red-900/10':''}`}>
+                          <td className="px-3 py-3 no-print" onClick={e=>e.stopPropagation()}>
+                            <input type="checkbox" checked={chkd} onChange={()=>toggleOne(rec.id)}
+                              className="w-4 h-4 rounded accent-[#031B4E] cursor-pointer"/>
+                          </td>
+                          <td className="px-4 py-3 font-mono text-xs text-gray-400 dark:text-gray-500">{rec.recordId}</td>
+                          <td className="px-4 py-3 font-semibold text-gray-900 dark:text-white max-w-[180px]"><div className="truncate">{rec.mainProjectName}</div></td>
+                          <td className="px-4 py-3 text-gray-600 dark:text-gray-400 max-w-[200px]"><div className="truncate">{rec.subTaskDetails||'—'}</div></td>
+                          <td className="px-4 py-3 text-gray-700 dark:text-gray-300 whitespace-nowrap">{rec.owner||'—'}</td>
+                          <td className="px-4 py-3" onClick={e=>e.stopPropagation()}>
+                            <QuickStatus record={rec} onUpdate={s=>dispatch({type:'UPDATE_RECORD',payload:{...rec,progress:s}})}/>
+                          </td>
+                          <td className="px-4 py-3"><PriBadge priority={rec.priority}/></td>
+                          <td className="px-4 py-3 whitespace-nowrap text-xs">
+                            <span className={ov?'text-red-600 font-bold':ds?'text-amber-600 font-semibold':'text-gray-500 dark:text-gray-400'}>
+                              {ov&&'⚠ '}{fmtDate(rec.dueDate)}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-xs text-gray-400">{rec.department||'—'}</td>
+                          <td className="px-4 py-3 no-print" onClick={e=>e.stopPropagation()}>
+                            <div className="flex gap-0.5">
+                              <button onClick={()=>setEdit(rec)} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 hover:text-gray-700"><I.Edit/></button>
+                              <button onClick={()=>deleteOne(rec)} className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-600"><I.Trash/></button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Modals */}
+          <Modal open={addOpen}  onClose={()=>setAdd(false)} title="Add Work Record"><RecordForm onSave={saveRec} onClose={()=>setAdd(false)}/></Modal>
+          <Modal open={!!editRec} onClose={()=>setEdit(null)} title="Edit Work Record"><RecordForm initial={editRec} onSave={saveRec} onClose={()=>setEdit(null)}/></Modal>
+
+          {/* Detail */}
+          <Modal open={!!detail} onClose={()=>setDet(null)} title="Record Detail" width="max-w-lg">
+            {detail && (
+              <div className="space-y-4">
+                <div className="flex flex-wrap gap-2">
+                  <StatusBadge status={detail.progress}/>
+                  <PriBadge priority={detail.priority}/>
+                  {isOverdue(detail.dueDate,detail.progress) && <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-700">⚠ Overdue</span>}
+                </div>
+                <div><p className="text-xs text-gray-400 uppercase tracking-wide mb-1">Main Item</p><p className="font-bold text-gray-900 dark:text-white">{detail.mainProjectName}</p></div>
+                {detail.subTaskDetails && <div><p className="text-xs text-gray-400 uppercase tracking-wide mb-1">Activity</p><p className="text-gray-700 dark:text-gray-300">{detail.subTaskDetails}</p></div>}
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  {[['Owner',detail.owner],['Department',detail.department],['Work Type',detail.workType],['Location',detail.location],['Start Date',fmtDate(detail.projectStartDate)],['Due Date',fmtDate(detail.dueDate)]].filter(([,v])=>v&&v!=='—').map(([k,v])=>(
+                    <div key={k}><p className="text-xs text-gray-400 uppercase tracking-wide">{k}</p><p className="font-semibold text-gray-800 dark:text-gray-200 mt-0.5">{v}</p></div>
+                  ))}
+                </div>
+                {detail.currentStatusAndComments && <div><p className="text-xs text-gray-400 uppercase tracking-wide mb-1">Comments</p><p className="text-sm text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-700/50 rounded-xl p-3">{detail.currentStatusAndComments}</p></div>}
+                <div className="flex justify-between items-center text-xs text-gray-400 pt-2 border-t dark:border-gray-700">
+                  <span>ID: {detail.recordId}</span><span>Updated: {fmtDate(detail.updatedAt)}</span>
+                </div>
+                <div className="flex justify-end gap-2">
+                  <Btn variant="outline" onClick={()=>{ setDet(null); setEdit(detail); }}><I.Edit/>Edit</Btn>
+                  <Btn variant="outline" onClick={()=>setDet(null)}>Close</Btn>
+                </div>
+              </div>
+            )}
+          </Modal>
+
+          <Confirm open={!!delRec} onClose={()=>setDel(null)}
+            onConfirm={()=>deleteOne(delRec)}
+            title="Delete Record" message={`Delete "${delRec?.mainProjectName}"? You can undo immediately after.`} danger/>
+
+          {/* Bulk delete confirm */}
+          <Confirm open={bulkDelConfirm} onClose={()=>setBulkDel(false)}
+            onConfirm={()=>{ dispatch({type:'DELETE_RECORDS_BULK',payload:[...selected]}); setSelected(new Set()); showToast(`${selected.size} records deleted`,'info'); }}
+            title="Delete Selected" message={`Delete ${selected.size} selected records? This cannot be undone.`} danger/>
+
+          {/* Bulk action bar (Phase 2/3) */}
+          <BulkBar
+            selected={selected}
+            onClear={()=>setSelected(new Set())}
+            onDelete={()=>setBulkDel(true)}
+            onStatusChange={s=>{ dispatch({type:'UPDATE_RECORDS_BULK',payload:{ids:[...selected],patch:{progress:s}}}); showToast(`${selected.size} records updated`); setSelected(new Set()); }}
+          />
+        </div>
+      );
+    };
+
+    // ─────────────────────────────────────────────────────────────
+    // OWNERS VIEW
+    // ─────────────────────────────────────────────────────────────
+    const OwnersView = () => {
+      const { state, dispatch, showToast } = useApp();
+      const [q, setQ]          = useState('');
+      const [addOpen, setAdd]  = useState(false);
+      const [editOwn, setEdit] = useState(null);
+      const [delOwn,  setDel]  = useState(null);
+
+      const filtered = useMemo(() => {
+        if (!q) return state.owners;
+        const lq = q.toLowerCase();
+        return state.owners.filter(o=>[o.name,o.role,o.department].some(v=>(v||'').toLowerCase().includes(lq)));
+      }, [state.owners, q]);
+
+      const workCount = n => state.records.filter(r=>r.owner===n).length;
+      const riskCount = n => state.records.filter(r=>r.owner===n&&(r.progress==='At Risk'||r.progress==='Blocked'||isOverdue(r.dueDate,r.progress))).length;
+
+      const save = form => {
+        if (editOwn) { dispatch({type:'UPDATE_OWNER',payload:{...editOwn,...form}}); showToast('Owner updated'); setEdit(null); }
+        else         { dispatch({type:'ADD_OWNER',payload:form}); showToast('Owner added'); setAdd(false); }
+      };
+
+      const del = id => {
+        const o = state.owners.find(x=>x.id===id);
+        const linked = state.records.filter(r=>r.owner===o?.name).length;
+        if (linked) { showToast(`Cannot delete: ${linked} records assigned to this owner`,'error'); return; }
+        dispatch({type:'DELETE_OWNER',payload:id}); showToast('Owner deleted','info');
+      };
+
+      const initials = name => name.split(' ').map(n=>n[0]||'').join('').slice(0,2).toUpperCase();
+
+      return (
+        <div className="space-y-4">
+          <div className="flex items-center gap-3">
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"><I.Search/></span>
+              <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search owners…"
+                className="pl-9 pr-3 py-2 rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 dark:text-white text-sm w-52 focus:outline-none focus:ring-2 focus:ring-[#031B4E]"/>
+            </div>
+            <Btn size="sm" onClick={()=>setAdd(true)} className="ml-auto"><I.Plus/>Add Owner</Btn>
+          </div>
+
+          {filtered.length===0 ? (
+            <EmptyState Icon={I.Users} title={q?'No matching owners':'No owners yet'}
+              desc={q?'Try a different search.':'Add team members so you can assign work records.'}
+              action={!q&&<Btn onClick={()=>setAdd(true)}><I.Plus/>Add First Owner</Btn>}/>
+          ) : (
+            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 dark:bg-gray-700/60 text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                  <tr>
+                    <th className="px-4 py-3 text-left">Name</th>
+                    <th className="px-4 py-3 text-left">Role</th>
+                    <th className="px-4 py-3 text-left">Department</th>
+                    <th className="px-4 py-3 text-left">Location</th>
+                    <th className="px-4 py-3 text-left">Status</th>
+                    <th className="px-4 py-3 text-center">Items</th>
+                    <th className="px-4 py-3 text-center">At Risk</th>
+                    <th className="px-4 py-3 w-20"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+                  {filtered.map(o => {
+                    const wc=workCount(o.name), rc=riskCount(o.name);
+                    return (
+                      <tr key={o.id} className="hover:bg-blue-50/30 dark:hover:bg-gray-700/40 transition-colors">
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-full bg-[#031B4E] text-white flex items-center justify-center text-xs font-black shrink-0">{initials(o.name)}</div>
+                            <div><p className="font-semibold text-gray-900 dark:text-white">{o.name}</p><p className="text-xs text-gray-400">{o.email||''}</p></div>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 text-gray-600 dark:text-gray-400">{o.role||'—'}</td>
+                        <td className="px-4 py-3 text-gray-600 dark:text-gray-400">{o.department||'—'}</td>
+                        <td className="px-4 py-3 text-gray-600 dark:text-gray-400">{o.location||'—'}</td>
+                        <td className="px-4 py-3"><span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-semibold ${o.status==='Active'?'bg-green-100 text-green-700':'bg-gray-100 text-gray-500'}`}>{o.status||'Active'}</span></td>
+                        <td className="px-4 py-3 text-center"><span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-blue-50 text-blue-700 text-xs font-black">{wc}</span></td>
+                        <td className="px-4 py-3 text-center"><span className={`inline-flex items-center justify-center w-7 h-7 rounded-full text-xs font-black ${rc?'bg-red-50 text-red-700':'bg-gray-50 text-gray-400'}`}>{rc}</span></td>
+                        <td className="px-4 py-3">
+                          <div className="flex gap-0.5">
+                            <button onClick={()=>setEdit(o)} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 hover:text-gray-700"><I.Edit/></button>
+                            <button onClick={()=>setDel(o)}  className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-600"><I.Trash/></button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <Modal open={addOpen}   onClose={()=>setAdd(false)} title="Add Owner" width="max-w-xl"><OwnerForm onSave={save} onClose={()=>setAdd(false)}/></Modal>
+          <Modal open={!!editOwn} onClose={()=>setEdit(null)} title="Edit Owner" width="max-w-xl"><OwnerForm initial={editOwn} onSave={save} onClose={()=>setEdit(null)}/></Modal>
+          <Confirm open={!!delOwn} onClose={()=>setDel(null)} onConfirm={()=>del(delOwn.id)} title="Remove Owner" message={`Remove "${delOwn?.name}" from the team?`} danger/>
+        </div>
+      );
+    };
+
+    // ─────────────────────────────────────────────────────────────
+    // AUDIT LOG
+    // ─────────────────────────────────────────────────────────────
+    const AuditView = () => {
+      const { state } = useApp();
+      const log = state.auditLog||[];
+      if (!log.length) return <EmptyState Icon={I.History} title="No activity yet" desc="Every add, edit, and delete is logged here automatically."/>;
+      return (
+        <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 dark:bg-gray-700/60 text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+              <tr><th className="px-4 py-3 text-left w-44">Time</th><th className="px-4 py-3 text-left w-36">Action</th><th className="px-4 py-3 text-left">Detail</th></tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+              {log.map(e=>(
+                <tr key={e.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/30">
+                  <td className="px-4 py-2.5 text-xs text-gray-400 whitespace-nowrap">{new Date(e.ts).toLocaleString('en-GB')}</td>
+                  <td className="px-4 py-2.5 font-semibold text-gray-700 dark:text-gray-300">{e.action}</td>
+                  <td className="px-4 py-2.5 text-gray-500 dark:text-gray-400">{e.detail}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+    };
+
+    // ─────────────────────────────────────────────────────────────
+    // SETTINGS
+    // ─────────────────────────────────────────────────────────────
+    const SettingsView = () => {
+      const { state, dispatch, showToast, folder, connectFolder:cf, saveFolder:sf } = useApp();
+      const [cfg, setCfg] = useState(()=>({...state.settings}));
+      const [nv,  setNv]  = useState({ departments:'', workTypes:'', locations:'' });
+
+      const save = () => { dispatch({type:'SET_SETTINGS',payload:cfg}); showToast('Settings saved'); };
+      const addV = k => { const v=nv[k].trim(); if(!v||cfg[k].includes(v)) return; setCfg(p=>({...p,[k]:[...p[k],v]})); setNv(n=>({...n,[k]:''})); };
+      const rmV  = (k,v) => setCfg(p=>({...p,[k]:p[k].filter(x=>x!==v)}));
+
+      const DDEditor = ({ label, sk }) => (
+        <div className="bg-white dark:bg-gray-800 rounded-2xl p-5 shadow-sm border border-gray-100 dark:border-gray-700">
+          <h4 className="font-bold text-gray-900 dark:text-white mb-3">{label}</h4>
+          <div className="flex gap-2 mb-3">
+            <input value={nv[sk]} onChange={e=>setNv(n=>({...n,[sk]:e.target.value}))}
+              onKeyDown={e=>e.key==='Enter'&&addV(sk)} placeholder={`Add ${label.toLowerCase()}…`}
+              className="flex-1 px-3 py-2 rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm dark:text-white focus:outline-none focus:ring-2 focus:ring-[#031B4E]"/>
+            <Btn size="sm" onClick={()=>addV(sk)}><I.Plus/></Btn>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {cfg[sk].map(v=>(
+              <span key={v} className="inline-flex items-center gap-1.5 px-3 py-1 bg-gray-100 dark:bg-gray-700 rounded-full text-sm text-gray-700 dark:text-gray-300">
+                {v}<button onClick={()=>rmV(sk,v)} className="hover:text-red-500 transition-colors ml-0.5"><I.X/></button>
+              </span>
+            ))}
+          </div>
+        </div>
+      );
+
+      return (
+        <div className="space-y-5 max-w-2xl">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl p-5 shadow-sm border border-gray-100 dark:border-gray-700">
+            <h3 className="font-bold text-gray-900 dark:text-white mb-4">Application</h3>
+            <Input label="Application Title" value={cfg.appTitle} onChange={e=>setCfg(p=>({...p,appTitle:e.target.value}))}/>
+          </div>
+
+          <div className="bg-white dark:bg-gray-800 rounded-2xl p-5 shadow-sm border border-gray-100 dark:border-gray-700">
+            <h3 className="font-bold text-gray-900 dark:text-white mb-1">Data Folder</h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">Connect a folder (Microsoft Edge) to auto-save <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded text-xs">tracker-data.json</code>.</p>
+            <div className="flex flex-wrap items-center gap-3">
+              {folder
+                ? <div className="flex items-center gap-2 px-3 py-2 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-xl text-sm text-green-700 dark:text-green-400"><I.FolderOk/>{folder}</div>
+                : <span className="text-sm text-gray-400">No folder connected</span>}
+              <Btn variant="outline" size="sm" onClick={cf}><I.Folder/>{folder?'Change':'Connect Folder'}</Btn>
+              {folder && <Btn variant="outline" size="sm" onClick={sf}><I.Save/>Save Now</Btn>}
+            </div>
+          </div>
+
+          <DDEditor label="Departments" sk="departments"/>
+          <DDEditor label="Work Types"  sk="workTypes"/>
+          <DDEditor label="Locations"   sk="locations"/>
+
+          <Btn onClick={save}><I.Save/>Save Settings</Btn>
+
+          {/* Data Health (Phase 4) */}
+          <DataHealth/>
+        </div>
+      );
+    };
+
+    // ─────────────────────────────────────────────────────────────
+    // DATA HEALTH  (Phase 4)
+    // ─────────────────────────────────────────────────────────────
+    const DataHealth = () => {
+      const { state, dispatch, showToast } = useApp();
+      const r = state.records;
+
+      const issues = useMemo(() => {
+        const list = [];
+        const unowned = r.filter(x=>!x.owner);
+        if (unowned.length) list.push({ level:'warn', msg:`${unowned.length} record(s) have no owner assigned.`, fix:null });
+
+        const noDue = r.filter(x=>!x.dueDate && x.progress!=='Completed');
+        if (noDue.length) list.push({ level:'warn', msg:`${noDue.length} active record(s) have no due date.`, fix:null });
+
+        const ownerNames = new Set(state.owners.map(o=>o.name));
+        const orphaned = r.filter(x=>x.owner && !ownerNames.has(x.owner));
+        if (orphaned.length) list.push({
+          level:'error',
+          msg:`${orphaned.length} record(s) reference owners not in the Owners list: ${[...new Set(orphaned.map(x=>x.owner))].join(', ')}.`,
+          fix: null
+        });
+
+        const noStatus = r.filter(x=>!STATUSES.includes(x.progress));
+        if (noStatus.length) list.push({ level:'error', msg:`${noStatus.length} record(s) have an unrecognised status.`, fix:null });
+
+        if (!list.length) list.push({ level:'ok', msg:'No data quality issues found.', fix:null });
+        return list;
+      }, [r, state.owners]);
+
+      return (
+        <div className="bg-white dark:bg-gray-800 rounded-2xl p-5 shadow-sm border border-gray-100 dark:border-gray-700">
+          <h3 className="font-bold text-gray-900 dark:text-white mb-4 flex items-center gap-2"><I.Shield/>Data Health</h3>
+          <div className="space-y-2">
+            {issues.map((iss,i)=>(
+              <div key={i} className={`flex items-start gap-3 px-4 py-3 rounded-xl text-sm ${iss.level==='ok'?'bg-green-50 text-green-700 dark:bg-green-900/20 dark:text-green-400':iss.level==='error'?'bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-400':'bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400'}`}>
+                {iss.level==='ok' ? <I.Check/> : <I.Warning/>}
+                <span className="flex-1">{iss.msg}</span>
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-gray-400 mt-3">{r.length} total records · {state.owners.length} owners · last checked now</p>
+        </div>
+      );
+    };
+
+    // ─────────────────────────────────────────────────────────────
+    // SHORTCUTS MODAL  (Phase 2)
+    // ─────────────────────────────────────────────────────────────
+    const SHORTCUTS = [
+      { key:'D', desc:'Go to Dashboard' },
+      { key:'R', desc:'Go to Work Records' },
+      { key:'O', desc:'Go to Owners' },
+      { key:'W', desc:'Go to Workload' },
+      { key:'A', desc:'Go to Activity Log' },
+      { key:'S', desc:'Go to Settings' },
+      { key:'N', desc:'New record (on Records view)' },
+      { key:'/', desc:'Focus search' },
+      { key:'?', desc:'Show this help' },
+      { key:'Esc', desc:'Close modal / clear selection' },
+    ];
+    const ShortcutsModal = () => {
+      const { showShortcuts, setShowShortcuts } = useApp();
+      return (
+        <Modal open={showShortcuts} onClose={()=>setShowShortcuts(false)} title="Keyboard Shortcuts" width="max-w-sm">
+          <div className="space-y-2">
+            {SHORTCUTS.map(({key,desc})=>(
+              <div key={key} className="flex items-center gap-3">
+                <kbd className="min-w-[2.5rem] text-center px-2 py-1 rounded-lg bg-gray-100 dark:bg-gray-700 text-xs font-mono font-bold text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600">{key}</kbd>
+                <span className="text-sm text-gray-600 dark:text-gray-400">{desc}</span>
+              </div>
+            ))}
+          </div>
+        </Modal>
+      );
+    };
+
+    // ─────────────────────────────────────────────────────────────
+    // FILTER PRESETS  (Phase 2)
+    // ─────────────────────────────────────────────────────────────
+    const PRESETS = [
+      { label:'Overdue',       flt:{ status:'', owner:'', dept:'', wtype:'', pri:'' }, test: r => isOverdue(r.dueDate, r.progress) },
+      { label:'At Risk',       flt:{ status:'At Risk', owner:'', dept:'', wtype:'', pri:'' }, test: null },
+      { label:'Blocked',       flt:{ status:'Blocked', owner:'', dept:'', wtype:'', pri:'' }, test: null },
+      { label:'Due This Week', flt:{ status:'', owner:'', dept:'', wtype:'', pri:'' }, test: r => isDueSoon(r.dueDate, r.progress) },
+      { label:'Not Started',   flt:{ status:'Not Started', owner:'', dept:'', wtype:'', pri:'' }, test: null },
+      { label:'Completed',     flt:{ status:'Completed', owner:'', dept:'', wtype:'', pri:'' }, test: null },
+    ];
+    const FilterPresets = ({ onSelect, activePreset }) => (
+      <div className="flex flex-wrap gap-1.5 no-print">
+        <span className="text-xs text-gray-400 dark:text-gray-500 self-center mr-1 font-semibold">Quick:</span>
+        {PRESETS.map(p=>(
+          <button key={p.label} onClick={()=>onSelect(p)}
+            className={`px-2.5 py-1 rounded-full text-xs font-semibold border transition-all ${activePreset===p.label ? 'bg-[#031B4E] text-white border-[#031B4E]' : 'border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:border-[#031B4E] hover:text-[#031B4E]'}`}>
+            {p.label}
+          </button>
+        ))}
+      </div>
+    );
+
+    // ─────────────────────────────────────────────────────────────
+    // BULK ACTION BAR  (Phase 2 / 3)
+    // ─────────────────────────────────────────────────────────────
+    const BulkBar = ({ selected, onClear, onDelete, onStatusChange }) => {
+      const [statusOpen, setStatusOpen] = useState(false);
+      if (!selected.size) return null;
+      return (
+        <div className="no-print fixed bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-center gap-3 bg-[#031B4E] text-white px-5 py-3 rounded-2xl shadow-2xl animate-up">
+          <span className="text-sm font-bold">{selected.size} selected</span>
+          <div className="w-px h-5 bg-white/20"/>
+          <div className="relative">
+            <Btn variant="ghost" size="sm" className="text-white hover:bg-white/15" onClick={()=>setStatusOpen(s=>!s)}>
+              <I.Zap/>Change Status<I.ChevDown/>
+            </Btn>
+            {statusOpen && (
+              <div className="absolute bottom-full mb-2 left-0 bg-white dark:bg-gray-800 rounded-xl shadow-xl border dark:border-gray-700 py-1 min-w-[140px] z-50">
+                {STATUSES.map(s=>(
+                  <button key={s} onClick={()=>{ onStatusChange(s); setStatusOpen(false); }}
+                    className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2">
+                    <span className={`w-2 h-2 rounded-full ${STATUS_CFG[s].dot}`}/>{s}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <Btn variant="ghost" size="sm" className="text-red-300 hover:bg-white/15 hover:text-red-200" onClick={onDelete}>
+            <I.Trash/>Delete
+          </Btn>
+          <button onClick={onClear} className="p-1 rounded-lg hover:bg-white/15 transition-colors"><I.X/></button>
+        </div>
+      );
+    };
+
+    // ─────────────────────────────────────────────────────────────
+    // QUICK STATUS (inline dropdown in table)  (Phase 2)
+    // ─────────────────────────────────────────────────────────────
+    const QuickStatus = ({ record, onUpdate }) => {
+      const [open, setOpen] = useState(false);
+      const ref = useRef();
+      useEffect(() => {
+        const h = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+        document.addEventListener('mousedown', h);
+        return () => document.removeEventListener('mousedown', h);
+      }, []);
+      return (
+        <div ref={ref} className="relative inline-block">
+          <button onClick={e=>{ e.stopPropagation(); setOpen(o=>!o); }}>
+            <StatusBadge status={record.progress}/>
+          </button>
+          {open && (
+            <div className="absolute top-full mt-1 left-0 bg-white dark:bg-gray-800 rounded-xl shadow-xl border dark:border-gray-700 py-1 z-30 min-w-[140px] animate-up">
+              {STATUSES.map(s=>(
+                <button key={s} onClick={e=>{ e.stopPropagation(); onUpdate(s); setOpen(false); }}
+                  className={`w-full text-left px-3 py-2 text-xs font-semibold flex items-center gap-2 hover:bg-gray-50 dark:hover:bg-gray-700 ${record.progress===s?'text-[#031B4E] dark:text-blue-400':''}`}>
+                  <span className={`w-2 h-2 rounded-full ${STATUS_CFG[s].dot}`}/>{s}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    };
+
+    // ─────────────────────────────────────────────────────────────
+    // WORKLOAD VIEW  (Phase 3)
+    // ─────────────────────────────────────────────────────────────
+    const WorkloadView = () => {
+      const { state } = useApp();
+      const r = state.records;
+
+      const rows = useMemo(() => {
+        return state.owners.map(o => {
+          const items = r.filter(x=>x.owner===o.name);
+          const bySt  = Object.fromEntries(STATUSES.map(s=>[s, items.filter(x=>x.progress===s).length]));
+          const overdue = items.filter(x=>isOverdue(x.dueDate,x.progress)).length;
+          const pct = items.length ? Math.round((bySt['Completed']/items.length)*100) : 0;
+          return { ...o, items, total:items.length, bySt, overdue, pct };
+        }).filter(o=>o.total>0).sort((a,b)=>b.total-a.total);
+      }, [state.owners, r]);
+
+      // Also include unassigned
+      const unassigned = useMemo(() => {
+        const items = r.filter(x=>!x.owner||!state.owners.find(o=>o.name===x.owner));
+        return items.length ? items : [];
+      }, [r, state.owners]);
+
+      if (!r.length) return <EmptyState Icon={I.Grid} title="No data" desc="Add records and owners to see workload distribution."/>;
+
+      const initials = name => name.split(' ').map(n=>n[0]||'').join('').slice(0,2).toUpperCase();
+
+      return (
+        <div className="space-y-6">
+          {/* Summary cards */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <StatCard label="Active Owners" value={rows.length} gradient="bg-gradient-to-br from-[#031B4E] to-[#0d3080]" Icon={I.Users}/>
+            <StatCard label="Unassigned Items" value={unassigned.length} gradient={`bg-gradient-to-br ${unassigned.length?'from-amber-500 to-amber-700':'from-emerald-500 to-emerald-700'}`} Icon={I.Warning}/>
+            <StatCard label="Avg Items / Owner" value={rows.length?Math.round(r.length/rows.length):0} gradient="bg-gradient-to-br from-violet-500 to-violet-700" Icon={I.Target}/>
+            <StatCard label="Overdue Items" value={r.filter(x=>isOverdue(x.dueDate,x.progress)).length} gradient="bg-gradient-to-br from-rose-500 to-rose-700" Icon={I.Clock}/>
+          </div>
+
+          {/* Per-owner table */}
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
+            <div className="px-6 py-4 border-b dark:border-gray-700">
+              <h3 className="font-bold text-gray-900 dark:text-white">Owner Breakdown</h3>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 dark:bg-gray-700/60 text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                  <tr>
+                    <th className="px-4 py-3 text-left">Owner</th>
+                    <th className="px-4 py-3 text-center">Total</th>
+                    <th className="px-4 py-3 text-center">Not Started</th>
+                    <th className="px-4 py-3 text-center">In Progress</th>
+                    <th className="px-4 py-3 text-center">At Risk</th>
+                    <th className="px-4 py-3 text-center">Blocked</th>
+                    <th className="px-4 py-3 text-center">Completed</th>
+                    <th className="px-4 py-3 text-center">Overdue</th>
+                    <th className="px-4 py-3 text-left w-40">Completion</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+                  {rows.map(o=>(
+                    <tr key={o.id} className="hover:bg-blue-50/30 dark:hover:bg-gray-700/40 transition-colors">
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-8 h-8 rounded-full bg-[#031B4E] text-white flex items-center justify-center text-xs font-black shrink-0">{initials(o.name)}</div>
+                          <div><p className="font-semibold text-gray-900 dark:text-white text-sm">{o.name}</p><p className="text-xs text-gray-400">{o.department||'—'}</p></div>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-center font-black text-gray-800 dark:text-gray-200">{o.total}</td>
+                      <td className="px-4 py-3 text-center"><span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${o.bySt['Not Started']?'bg-gray-100 text-gray-600':'text-gray-300'}`}>{o.bySt['Not Started']||'—'}</span></td>
+                      <td className="px-4 py-3 text-center"><span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${o.bySt['In Progress']?'bg-blue-100 text-blue-700':'text-gray-300'}`}>{o.bySt['In Progress']||'—'}</span></td>
+                      <td className="px-4 py-3 text-center"><span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${o.bySt['At Risk']?'bg-amber-100 text-amber-700':'text-gray-300'}`}>{o.bySt['At Risk']||'—'}</span></td>
+                      <td className="px-4 py-3 text-center"><span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${o.bySt['Blocked']?'bg-red-100 text-red-700':'text-gray-300'}`}>{o.bySt['Blocked']||'—'}</span></td>
+                      <td className="px-4 py-3 text-center"><span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${o.bySt['Completed']?'bg-green-100 text-green-700':'text-gray-300'}`}>{o.bySt['Completed']||'—'}</span></td>
+                      <td className="px-4 py-3 text-center"><span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${o.overdue?'bg-red-100 text-red-700':'text-gray-300'}`}>{o.overdue||'—'}</span></td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          <div className="flex-1 bg-gray-100 dark:bg-gray-700 rounded-full h-2">
+                            <div className="h-2 rounded-full transition-all duration-500" style={{width:`${o.pct}%`,background:o.pct===100?'#22c55e':o.pct>50?'#3b82f6':'#f59e0b'}}/>
+                          </div>
+                          <span className="text-xs font-bold text-gray-600 dark:text-gray-400 w-9 text-right">{o.pct}%</span>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {unassigned.length > 0 && (
+                    <tr className="bg-amber-50/40 dark:bg-amber-900/10">
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-8 h-8 rounded-full bg-amber-400 text-white flex items-center justify-center text-xs font-black shrink-0">?</div>
+                          <div><p className="font-semibold text-amber-700 dark:text-amber-400 text-sm">Unassigned</p><p className="text-xs text-gray-400">No owner set</p></div>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-center font-black text-amber-700">{unassigned.length}</td>
+                      <td colSpan="7" className="px-4 py-3 text-xs text-amber-600 dark:text-amber-400">These records have no owner — assign them in Work Records.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    // ─────────────────────────────────────────────────────────────
+    // SIDEBAR + LAYOUT
+    // ─────────────────────────────────────────────────────────────
+    const NAV = [
+      { id:'dashboard', label:'Dashboard',    Ico:I.Home     },
+      { id:'records',   label:'Work Records', Ico:I.Layers   },
+      { id:'workload',  label:'Workload',     Ico:I.Grid     },
+      { id:'owners',    label:'Owners',       Ico:I.Users    },
+      { id:'audit',     label:'Activity Log', Ico:I.History  },
+      { id:'settings',  label:'Settings',     Ico:I.Settings },
+    ];
+
+    const Sidebar = ({ open, setOpen }) => {
+      const { view, setView, state, dark, toggleDark } = useApp();
+      const alert = state.records.filter(r=>r.progress==='At Risk'||r.progress==='Blocked'||isOverdue(r.dueDate,r.progress)).length;
+
+      return (
+        <>
+          {open && <div className="fixed inset-0 bg-black/40 z-20 lg:hidden" onClick={()=>setOpen(false)}/>}
+          <aside className={`fixed top-0 left-0 h-full w-60 bg-[#031B4E] text-white z-30 flex flex-col transition-transform duration-200 lg:translate-x-0 ${open?'translate-x-0':'-translate-x-full'}`}>
+            {/* Logo */}
+            <div className="flex items-center gap-3 px-5 py-4 border-b border-white/10">
+              <svg viewBox="0 0 64 64" width="36" height="36" className="shrink-0">
+                <rect width="64" height="64" rx="12" fill="#fff"/>
+                <rect width="64" height="64" rx="12" fill="#031B4E"/>
+                <path d="M42 8 56 6 47 48 39 36z" fill="#F71925"/>
+                <text x="8" y="42" fontFamily="Arial,sans-serif" fontSize="24" fontWeight="800" fill="white">FAB</text>
+              </svg>
+              <div>
+                <p className="font-black text-sm leading-tight">{state.settings.appTitle||'FAB Team Tracker'}</p>
+                <p className="text-xs text-white/40 mt-0.5">Offline · v2.0</p>
+              </div>
+            </div>
+
+            {/* Nav items */}
+            <nav className="flex-1 py-4 px-2.5 space-y-0.5 overflow-y-auto">
+              {NAV.map(({id,label,Ico})=>(
+                <button key={id} onClick={()=>{ setView(id); setOpen(false); }}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all
+                    ${view===id?'bg-white/15 text-white':'text-white/55 hover:bg-white/8 hover:text-white'}`}>
+                  <Ico/>
+                  <span className="flex-1 text-left">{label}</span>
+                  {id==='records' && alert>0 && <span className="bg-[#F71925] text-white text-[10px] font-black px-1.5 py-0.5 rounded-full min-w-[18px] text-center">{alert}</span>}
+                </button>
+              ))}
+            </nav>
+
+            {/* Footer */}
+            <div className="p-3 border-t border-white/10">
+              <button onClick={toggleDark} className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-sm font-semibold text-white/55 hover:bg-white/8 hover:text-white transition-all">
+                {dark?<I.Sun/>:<I.Moon/>}<span>{dark?'Light Mode':'Dark Mode'}</span>
+              </button>
+              <p className="text-[10px] text-white/25 px-3 pt-2">Data stored locally · No telemetry</p>
+            </div>
+          </aside>
+        </>
+      );
+    };
+
+    const TITLES = { dashboard:'Dashboard', records:'Work Records', workload:'Workload', owners:'Owners', audit:'Activity Log', settings:'Settings' };
+
+    const App = () => {
+      const { view, setView, state, setShowShortcuts } = useApp();
+      const [sideOpen, setSideOpen] = useState(false);
+      const searchRef = useRef();
+
+      // ── Keyboard shortcuts (Phase 2) ──
+      useEffect(() => {
+        const handler = e => {
+          const tag = document.activeElement?.tagName;
+          if (tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT') return;
+          const k = e.key.toLowerCase();
+          if (k==='?')         { e.preventDefault(); setShowShortcuts(s=>!s); }
+          else if (k==='d')    setView('dashboard');
+          else if (k==='r')    setView('records');
+          else if (k==='w')    setView('workload');
+          else if (k==='o')    setView('owners');
+          else if (k==='a')    setView('audit');
+          else if (k==='s')    setView('settings');
+          else if (k==='/')    { e.preventDefault(); searchRef.current?.focus(); }
+        };
+        document.addEventListener('keydown', handler);
+        return () => document.removeEventListener('keydown', handler);
+      }, [setView, setShowShortcuts]);
+
+      const VIEWS = {
+        dashboard: <Dashboard/>,
+        records:   <RecordsView searchRef={searchRef}/>,
+        workload:  <WorkloadView/>,
+        owners:    <OwnersView/>,
+        audit:     <AuditView/>,
+        settings:  <SettingsView/>,
+      };
+
+      return (
+        <div className="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors duration-200">
+          <Sidebar open={sideOpen} setOpen={setSideOpen}/>
+          <div className="lg:pl-60 transition-all">
+            <header className="no-print sticky top-0 z-10 bg-white/80 dark:bg-gray-900/80 backdrop-blur-md border-b border-gray-200 dark:border-gray-700 px-4 lg:px-6 h-14 flex items-center gap-3">
+              <button onClick={()=>setSideOpen(true)} className="lg:hidden p-2 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500"><I.Menu/></button>
+              <div className="flex-1">
+                <h1 className="text-base font-black text-gray-900 dark:text-white">{TITLES[view]}</h1>
+                <p className="text-xs text-gray-400 hidden sm:block leading-none">{state.records.length} records · {state.owners.length} owners</p>
+              </div>
+              <button onClick={()=>window.print()} title="Print / Save as PDF"
+                className="p-2 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors">
+                <I.Print/>
+              </button>
+              <button onClick={()=>setShowShortcuts(true)} title="Keyboard shortcuts (?)"
+                className="p-2 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors">
+                <I.Keyboard/>
+              </button>
+            </header>
+            <main className="p-4 lg:p-6 animate-up">{VIEWS[view]}</main>
+          </div>
+          <Toast/>
+          <ShortcutsModal/>
+        </div>
+      );
+    };
+
+    // ─────────────────────────────────────────────────────────────
+    // MOUNT
+    // ─────────────────────────────────────────────────────────────
+    ReactDOM.createRoot(document.getElementById('root')).render(<AppProvider><App/></AppProvider>);
+  </script>
+</body>
+</html>
