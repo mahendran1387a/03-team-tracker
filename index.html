@@ -758,7 +758,6 @@
       const [sort, setSort]         = useState({ k:'dueDate', d:'asc' });
       const [addOpen, setAdd]       = useState(false);
       const [editRec, setEdit]      = useState(null);
-      const [delRec,  setDel]       = useState(null);
       const [detail,  setDet]       = useState(null);
       const [selected, setSelected] = useState(new Set());
       const [activePreset, setActivePreset] = useState(null);
@@ -802,12 +801,16 @@
         setSelected(new Set());
       };
 
-      // Keyboard shortcut N = new record
+      // Keyboard shortcut N = new record (guard: no modal open, no input focused)
       useEffect(() => {
-        const h = e => { if(e.key==='n'&&document.activeElement?.tagName!=='INPUT'&&document.activeElement?.tagName!=='TEXTAREA') setAdd(true); };
+        const h = e => {
+          const tag = document.activeElement?.tagName;
+          if (e.key==='n' && tag!=='INPUT' && tag!=='TEXTAREA' && tag!=='SELECT' && !addOpen && !editRec && !detail)
+            setAdd(true);
+        };
         document.addEventListener('keydown', h);
         return () => document.removeEventListener('keydown', h);
-      }, []);
+      }, [addOpen, editRec, detail]);
 
       const saveRec = (form) => {
         const data = { ...form, recordId: form.recordId || nextId(state.records) };
@@ -995,14 +998,16 @@
             )}
           </Modal>
 
-          <Confirm open={!!delRec} onClose={()=>setDel(null)}
-            onConfirm={()=>deleteOne(delRec)}
-            title="Delete Record" message={`Delete "${delRec?.mainProjectName}"? You can undo immediately after.`} danger/>
-
           {/* Bulk delete confirm */}
           <Confirm open={bulkDelConfirm} onClose={()=>setBulkDel(false)}
-            onConfirm={()=>{ dispatch({type:'DELETE_RECORDS_BULK',payload:[...selected]}); setSelected(new Set()); showToast(`${selected.size} records deleted`,'info'); }}
-            title="Delete Selected" message={`Delete ${selected.size} selected records? This cannot be undone.`} danger/>
+            onConfirm={()=>{
+              const ids = [...selected], count = ids.length;
+              dispatch({ type:'DELETE_RECORDS_BULK', payload:ids });
+              setSelected(new Set());
+              setBulkDel(false);
+              showToast(`${count} record${count!==1?'s':''} deleted`, 'info');
+            }}
+            title="Delete Selected" message={`Delete ${selected.size} selected record${selected.size!==1?'s':''}? This cannot be undone.`} danger/>
 
           {/* Bulk action bar (Phase 2/3) */}
           <BulkBar
@@ -1209,7 +1214,7 @@
     // DATA HEALTH  (Phase 4)
     // ─────────────────────────────────────────────────────────────
     const DataHealth = () => {
-      const { state, dispatch, showToast } = useApp();
+      const { state } = useApp();
       const r = state.records;
 
       const issues = useMemo(() => {
